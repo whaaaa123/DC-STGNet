@@ -84,54 +84,6 @@ class TemporalEmbedding(nn.Module):
         return tem_emb
 
 
-class TConv(nn.Module):
-    def __init__(self, features=128, layer=4, length=12, dropout=0.1):
-        super(TConv, self).__init__()
-        layers = []
-        kernel_size = int(length / layer + 1)
-        # for i in range(3):
-        #     self.conv1 = nn.Conv2d(features, features, (1, 2))
-        #     self.relu1 = nn.ReLU()
-        #     self.dropout1 = nn.Dropout(dropout)
-        #     self.conv = nn.Conv2d(features, features, (1, kernel_size))
-        #     self.relu = nn.ReLU()
-        #     self.dropout = nn.Dropout(dropout)
-        #     layers += [nn.Sequential(self.conv1, self.relu1, self.dropout1,self.conv, self.relu, self.dropout)]
-        # self.tcn = nn.Sequential(*layers)
-
-        # self.conv = nn.Conv2d(features, features, (1, 2))
-        # self.relu = nn.ReLU()
-
-        self.relu2 = nn.ReLU()
-        #构建空间部分的两个记忆点，分别是第1步memory和第12步memory2
-        self.memory = nn.Parameter(torch.randn(features, 170))
-        nn.init.xavier_uniform_(self.memory)
-        self.memory2 = nn.Parameter(torch.randn(features, 170))
-        nn.init.xavier_uniform_(self.memory)
-    def forward(self, x):
-        adj_dyn_1 =torch.einsum("bcnt, cm->bnm", x[..., :1], self.memory).contiguous()
-
-
-        adj_dyn_2 =  torch.einsum("bcnt, cm->bnm", x[..., -1:], self.memory2).contiguous()
-
-
-
-        # adj = torch.cat((x[..., :1], x[..., -1:]),dim=-1).permute(0,3,2,1)
-        # adj=adj@adj.transpose(3,2)
-        adj=adj_dyn_2-adj_dyn_1/ math.sqrt(x.shape[1])  #计算两个记忆点之前的差值，从而得到流量趋势
-        # adj=torch.softmax(self.relu2(adj),dim=-1)
-        # x = nn.functional.pad(x, (1, 0, 0, 0))
-
-
-        # x = self.tcn(x)+self.relu(self.conv(x[...,-2:]))+x[...,-1:]
-
-        # adj1=x.squeeze()
-        # adj1 = adj1.transpose(2, 1) @ adj1
-        adj=torch.softmax(self.relu2(adj),dim=-1)
-
-        return x[...,-1:],adj    #返回时序特征的第12步和12步趋势的softmax值
-
-
 class SpatialAttention(nn.Module):
     def __init__(self, device, d_model, head, num_nodes, seq_length=1, dropout=0.1):
         super(SpatialAttention, self).__init__()
@@ -141,51 +93,22 @@ class SpatialAttention(nn.Module):
         self.num_nodes = num_nodes
         self.seq_length = seq_length
         self.d_model = d_model
-        # self.q = Conv(d_model)
+
         self.v = Conv(d_model)
         self.concat = Conv(d_model)
 
 
-        # nn.init.xavier_uniform_(self.memory)
-
-        # self.weight = nn.Parameter(torch.ones(d_model, num_nodes, seq_length))
-
-
-        # self.nodevec1 = nn.Parameter(torch.randn( self.num_nodes,10 ), requires_grad=True)
-        #
-
 
     def forward(self, input, adj_list=None):
         value =  self.v(input)
-        # query = query.view(
-        #     query.shape[0], -1, self.d_k, query.shape[2], self.seq_length
-        # ).permute(0, 1, 4, 3, 2)
-        # adj_dyn_1 = torch.softmax(
-        #     F.relu(
-        #         torch.einsum("bcnt, cm->bnm", value, self.memory).contiguous()
-        #         / math.sqrt(value.shape[1])
-        #     ),
-        #     -1,
-        # )
+
         value = value.view(
             value.shape[0], -1, self.d_k, value.shape[2], self.seq_length
         ).permute(
             0, 1, 4, 3, 2
         )
 
-        # key = torch.softmax(self.memory / math.sqrt(self.d_k), dim=-1)
-        # query = torch.softmax(query / math.sqrt(self.d_k), dim=-1)
-
-
-
-        # kv = torch.einsum("hlnx, bhlny->bhlxy", key, value)
-        # attn_qkv = torch.einsum("bhlnx, bhlxy->bhlny", query, kv)
-        adj_f= adj_list
-
-
-        attn_dyn = torch.einsum("bnm,bhlnc->bhlnc",adj_f , value)
-
-
+        attn_dyn = torch.einsum("bnm,bhlnc->bhlnc",adj_list , value)
 
         x =  attn_dyn
         x = (
@@ -310,7 +233,7 @@ class TATT_1(nn.Module):
 
         return x_1
 
-class STAMT(nn.Module):
+class DC_STGNet(nn.Module):
     def __init__(
         self,
         device,
@@ -341,9 +264,6 @@ class STAMT(nn.Module):
 
         self.Temb = TemporalEmbedding(time, channels)
 
-        # self.tconv = TConv(channels, layer=4, length=self.input_len)
-
-        # self.start_conv = nn.Conv2d(self.input_dim, channels, kernel_size=(1, 1))
 
         self.network_channel = channels * 2
 
@@ -387,9 +307,7 @@ class STAMT(nn.Module):
         return sum([param.nelement() for param in self.parameters()])
 
     def forward(self, history_data):
-        input_data = history_data
-        residual_cpu = input_data.cpu()
-        import pywt
+
 
         # 原始张量转 NumPy
         residual_numpy = history_data.cpu().detach().numpy()
@@ -415,19 +333,6 @@ class STAMT(nn.Module):
         input_data2 = self.DCL(input_data_1, input_data_2)
 
 
-        # history_data = history_data.permute(0, 3, 2, 1)
-        # input_data = self.start_conv(input_data)
-
-        # input,adj = self.tconv(input_data)    #构建邻接矩阵
-        # three = F.softmax(F.relu(input_data2.squeeze().permute(0, 2, 1) @ input_data2.squeeze()), dim=-1).unsqueeze(-1)
-        #
-        # one=self.fc_d(self.Temb(history_data.permute(0, 3, 2, 1))[0]).squeeze()
-        # two=self.fc_w(self.Temb(history_data.permute(0, 3, 2, 1))[1]).squeeze()
-        # one=F.softmax(F.relu(one.permute(1, 0) @ one), dim=-1).unsqueeze(-1).expand_as(three)
-        # two = F.softmax(F.relu(two.permute(1, 0) @ two), dim=-1).unsqueeze(-1).expand_as(three)
-        # fusion = torch.cat((three,one, two), dim=-1)
-        # adj_f = torch.softmax(self.fc(fusion).squeeze(), -1)
-
         day=history_data[:,1,0,-1]*288
         week=history_data[:,2,0,-1]
         days=self.nodevec_p1[day.cpu().numpy()]
@@ -437,22 +342,17 @@ class STAMT(nn.Module):
         adp = torch.einsum('ck, ajk->ajc', self.node_embeddings, adp)
         input_data=input_data2.squeeze()
         adj_f = torch.einsum('abc, abd->acd', input_data, adp)
-        adp = F.relu(adj_f)
-        adj_f = F.softmax(adp, dim=2)
+        adj_f = F.relu(adj_f)
+        adj_f = F.softmax(adj_f, dim=2)
 
-
-        # topk_values, topk_indices = torch.topk(adj_f, k=int(adj_f.shape[1] * 0.3), dim=-1)
-        # mask = torch.zeros_like(adj_f)
-        # mask.scatter_(-1, topk_indices, 1)
-        # adj_f = adj_f * mask
 
 
 
 
         tem_emb = self.Temb(history_data.permute(0, 3, 2, 1))
 
-        data_st = torch.cat([input_data2] + [tem_emb], dim=1)   #数据由频域数据、时序数据最后一步和时间嵌入共同组成
-        #空间记忆点
+        data_st = torch.cat([input_data2] + [tem_emb], dim=1)
+
         data_st = self.SpatialBlock(data_st,adj_f) + self.fc_st2(data_st)* torch.sigmoid(self.fc_st(data_st))
 
         prediction = self.regression_layer(data_st)
